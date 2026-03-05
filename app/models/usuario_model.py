@@ -1,0 +1,31 @@
+from sqlalchemy import Column, String, Boolean, Text, TIMESTAMP
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.sql import func
+from app.core.database import Base
+from sqlalchemy.orm import relationship
+import uuid
+
+
+class Usuario(Base):
+    __tablename__ = "usuario"
+
+    id_usuario = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    uid_firebase = Column(String, unique=True, nullable=False)     # agregar a BD
+    nombre_completo = Column(String, nullable=False)
+    fecha_nacimiento = Column(TIMESTAMP, server_default=func.now())
+    direccion = Column(Text, nullable=False)
+    correo = Column(String, unique=True, nullable=False)
+    telefono = Column(String, nullable=False)
+    discapacidad = Column(Text)
+    foto_ine = Column(Text, nullable=False)                        # nombre correcto
+    foto_ine_reverso = Column(Text, nullable=False)
+    rol = Column(String, nullable=False)                           # pasajero/conductor
+    activo = Column(Boolean, default=False)
+    autentificado = Column(Boolean, default=False)                 # email verificado
+    foto_perfil = Column(Text, nullable=False)
+    fecha_registro = Column(TIMESTAMP, server_default=func.now())
+
+    # Usa strings para evitar errores de carga
+    conductor = relationship("Conductor", back_populates="usuario", uselist=False)
+    pasajero = relationship("Pasajero", back_populates="usuario", uselist=False)
+
