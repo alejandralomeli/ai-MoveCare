@@ -1,10 +1,14 @@
 """
-Router de Inteligencia Artificial  
+Router de Inteligencia Artificial
 Endpoints:
   POST /ia/conductores/ubicacion        → Conductor actualiza su posición GPS
   GET  /ia/conductores/disponibles      → Admin: lista conductores sin viaje activo
   POST /ia/viajes/asignar               → Admin: asigna conductores a TODOS los viajes pendientes
   POST /ia/viajes/{id_viaje}/asignar    → Admin: asigna conductor a un viaje específico
+  GET  /ia/demo                         → Demo pública del algoritmo de asignación
+  POST /ia/rutas/calcular               → Calcula ruta óptima entre dos puntos (OSMnx)
+  POST /ia/rutas/optimizar              → Ordena múltiples paradas de forma óptima
+  GET  /ia/rutas/viaje/{id_viaje}       → Calcula ruta para un viaje existente en BD
 """
 
 from uuid import UUID
@@ -15,6 +19,11 @@ from pydantic import BaseModel, Field
 from scipy.optimize import linear_sum_assignment
 from sqlalchemy.orm import Session
 
+from app.ai.rutas.rutas_service import (
+    calcular_ruta,
+    calcular_ruta_viaje,
+    optimizar_paradas,
+)
 from app.ai.asignacion.asignacion_service import (
     _conductores_disponibles,
     _coordenadas_viaje,
@@ -52,6 +61,22 @@ class AsignarViajesPayload(BaseModel):
     ids_viaje: list[str] | None = Field(
         default=None,
         description="UUIDs de viajes a procesar. Omitir para procesar todos los pendientes.",
+    )
+
+
+class RutaSimplePayload(BaseModel):
+    origen: str = Field(..., description="Dirección o lugar de origen", example="Guadalajara Centro")
+    destino: str = Field(..., description="Dirección o lugar de destino", example="Zapopan Centro")
+
+
+class RutaMultiplePayload(BaseModel):
+    origen: str = Field(..., description="Punto de partida", example="Guadalajara Centro")
+    paradas: list[str] = Field(
+        ...,
+        min_length=2,
+        max_length=5,
+        description="Lista de paradas a visitar (2–5 destinos)",
+        example=["Tlaquepaque", "Tonalá", "Tlajomulco"],
     )
 
 
@@ -275,3 +300,78 @@ def asignar_viaje_especifico(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en asignación: {str(e)}")
+
+
+# ──────────────────────────────────────────────
+# Rutas (OpenStreetMap + NetworkX)
+# ──────────────────────────────────────────────
+
+@router.post("/rutas/calcular", summary="Calcular ruta óptima entre dos puntos")
+def calcular_ruta_endpoint(payload: RutaSimplePayload):
+    """
+    Calcula la ruta más corta en la **red vial real de OpenStreetMap** entre
+    origen y destino.
+
+    - Geocodifica ambas direcciones con Nominatim (OSM, sin Google Maps)
+    - Descarga el grafo vial del área usando OSMnx
+    - Aplica el algoritmo de Dijkstra (NetworkX) para encontrar la ruta más corta
+    - Devuelve waypoints, distancia en km y duración estimada en minutos
+
+    > La primera llamada puede tardar unos segundos mientras se descarga el grafo.
+    """
+    try:
+        resultado = calcular_ruta(payload.origen, payload.destino)
+        return {"ok": True, **resultado}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al calcular ruta: {str(e)}")
+
+
+@router.post("/rutas/optimizar", summary="Optimizar orden de múltiples paradas")
+def optimizar_ruta_endpoint(payload: RutaMultiplePayload):
+    """
+    Para viajes con **2 a 5 paradas**, calcula el orden de visita óptimo
+    usando el algoritmo de **Vecino Más Cercano** (Nearest Neighbor Heuristic).
+
+    - Geocodifica cada parada con Nominatim/OSM
+    - Ordena las paradas minimizando la distancia total recorrida
+    - Calcula la ruta real (red vial OSM) para cada segmento
+    - Devuelve el orden sugerido, distancia total y desglose por tramo
+
+    Ideal para `check_destinos = true` en el modelo de viaje.
+    """
+    try:
+        resultado = optimizar_paradas(payload.origen, payload.paradas)
+        return {"ok": True, **resultado}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al optimizar paradas: {str(e)}")
+
+
+@router.get("/rutas/viaje/{id_viaje}", summary="Calcular ruta para un viaje existente")
+def ruta_para_viaje(
+    id_viaje: str,
+    db: Session = Depends(get_db),
+    _=Depends(require_admin),
+):
+    """
+    Calcula la ruta óptima para un viaje ya registrado en la base de datos.
+
+    - Si `check_destinos = false`: ruta simple `punto_inicio → destino`
+    - Si `check_destinos = true`: optimiza el orden de todas las paradas en `destinos`
+
+    Los resultados pueden guardarse de vuelta en el campo `ruta` (JSONB) del viaje.
+    """
+    viaje = db.query(Viaje).filter(Viaje.id_viaje == id_viaje).first()
+    if not viaje:
+        raise HTTPException(status_code=404, detail="Viaje no encontrado")
+
+    try:
+        resultado = calcular_ruta_viaje(viaje)
+        return {"ok": True, "id_viaje": id_viaje, **resultado}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al calcular ruta del viaje: {str(e)}")
