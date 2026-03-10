@@ -162,13 +162,21 @@ def calcular_ruta(origen: str, destino: str) -> dict:
         for n in ruta_nodos
     ]
 
+    minutos = round(duracion_seg / 60)
+    horas = minutos // 60
+    mins_restantes = minutos % 60
+    duracion_texto = (
+        f"{horas} h {mins_restantes} min" if horas > 0 else f"{minutos} min"
+    )
+
     return {
         "origen": origen,
         "destino": destino,
         "coordenadas_origen": {"lat": lat_o, "lon": lon_o},
         "coordenadas_destino": {"lat": lat_d, "lon": lon_d},
         "distancia_km": round(longitud_m / 1000, 2),
-        "duracion_estimada_min": round(duracion_seg / 60),
+        "duracion_estimada_min": minutos,
+        "duracion_estimada_texto": duracion_texto,
         "waypoints": waypoints,
         "total_nodos": len(ruta_nodos),
     }
@@ -246,10 +254,17 @@ def optimizar_paradas(origen: str, paradas: list[str]) -> dict:
             "waypoints": seg["waypoints"],
         })
 
+    horas = duracion_total // 60
+    mins_restantes = duracion_total % 60
+    duracion_texto = (
+        f"{horas} h {mins_restantes} min" if horas > 0 else f"{duracion_total} min"
+    )
+
     return {
         "orden_optimo": orden_nombres,
         "distancia_total_km": round(distancia_total, 2),
         "duracion_total_min": duracion_total,
+        "duracion_total_texto": duracion_texto,
         "segmentos": segmentos,
     }
 
